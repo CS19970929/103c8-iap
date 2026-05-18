@@ -40,7 +40,7 @@ int main(void)
 		InitNVIC();
 		InitIO();
 		InitTimer();
-		InitSystemWakeUp(); // 少了这个初始化函数导致写出错，miss，让硬件整体正常工作
+		// InitSystemWakeUp(); // 少了这个初始化函数导致写出错，miss，让硬件整体正常工作
 							// 这个到底放哪里，是取决于硬件是否需要执行一些操作菜正常工作？
 							// 不过既然能执行这个函数，说明单片机已经正常工作
 		// FlashTest();
@@ -91,6 +91,32 @@ int main(void)
 // 	return 0;
 // }
 
+void jtag_disableAndConfIO(void)
+{
+#if 1
+	/* 禁用 JTAG，PB3、PB4、PA15重定义为普通IO */
+	GPIO_InitTypeDef GPIO_InitStructure;
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB, ENABLE); // 使能PA和PB端口时钟
+
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);	 // 配置复用时钟
+	GPIO_PinRemapConfig(GPIO_Remap_SWJ_JTAGDisable, ENABLE); // 启用SW，禁用JTAG，PA15、PB3、PB4可用
+
+#if 0
+	GPIO_ResetBits(GPIOB, GPIO_Pin_4);
+
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4 | GPIO_Pin_3; // 端口配置
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;	   // 推挽输出
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;	   // IO口速度为50MHz
+	GPIO_Init(GPIOB, &GPIO_InitStructure);				   // 根据设定参数初始化
+
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_15;		  // 端口配置
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;  // 推挽输出
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz; // IO口速度为50MHz
+	GPIO_Init(GPIOA, &GPIO_InitStructure);			  // 根据设定参数初始化
+#endif
+
+#endif
+}
 void InitIO(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure;
@@ -101,6 +127,7 @@ void InitIO(void)
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE); // 使能GPIOC时钟
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOD, ENABLE); // 使能GPIOD时钟
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOE, ENABLE); // 使能GPIOE时钟
+	jtag_disableAndConfIO();
 
     {
         GPIO_InitStructure.GPIO_Pin = PIN_AFE1_ALM | PIN_AFE1_MODE | PIN_AFE1_SHIP;
@@ -139,7 +166,8 @@ void InitIO(void)
 
         GPIO_SetBits(GPIO_M_STB, PIN_M_STB);
         GPIO_ResetBits(GPIO_AD_EN, PIN_AD_EN);
-        GPIO_ResetBits(GPIO_BLE_EN, PIN_BLE_EN);
+        // GPIO_ResetBits(GPIO_BLE_EN, PIN_BLE_EN);
+        GPIO_SetBits(GPIO_BLE_EN, PIN_BLE_EN);
         GPIO_ResetBits(GPIO_CMNT_EN, PIN_CMNT_EN);
         GPIO_SetBits(GPIO_SW_EN, PIN_SW_EN);
 
@@ -157,6 +185,7 @@ void InitIO(void)
         GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP; // 推挽输出
         GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz; // IO口速度为2MHz
         GPIO_Init(GPIO_BLE_EN, &GPIO_InitStructure);
+        GPIO_ResetBits(GPIO_BLE_EN, PIN_BLE_EN);
 
         GPIO_InitStructure.GPIO_Pin = PIN_SW_EN;
         GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP; // 推挽输出
@@ -168,6 +197,12 @@ void InitIO(void)
         GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz; // IO口速度为2MHz
         GPIO_Init(GPIO_CMNT_EN, &GPIO_InitStructure);
     }
+
+    MCUO_PWSV_STB = 1;
+    MCUO_PWSV_CTR = 0;
+    MCUO_DRV_CMNT = 0;
+    MCUO_AFE_SHIP = 0;
+    MCUO_AFE_MODE = 0;
 }
 void FlashTest(void)
 {
