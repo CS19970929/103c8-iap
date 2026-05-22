@@ -8,13 +8,14 @@
 
 #define CAN_IAP_BASE_ADDR               ((UINT32)0x08000000U)
 #define CAN_IAP_APP_BASE_ADDR           ((UINT32)0x08004800U)
-#define CAN_IAP_APP_LIMIT_ADDR          ((UINT32)0x08020000U)
+#define CAN_IAP_APP_LIMIT_ADDR          ((UINT32)0x0801F800U)
 #define CAN_IAP_SRAM_BASE_ADDR          ((UINT32)0x20000000U)
 #define CAN_IAP_SRAM_LIMIT_ADDR         ((UINT32)0x20005000U)
 
 #define CAN_IAP_CTRL_BASE_ID            ((UINT32)0x14F8F000U)
 #define CAN_IAP_ACK_BASE_ID             ((UINT32)0x14F8F100U)
-#define CAN_IAP_DATA_BASE_ID            ((UINT32)0x14F90000U)
+#define CAN_IAP_DATA_BASE_ID            ((UINT32)0x14000000U)
+#define CAN_IAP_DATA_ID_MASK            ((UINT32)0x1F000000U)
 
 #define CAN_IAP_CMD_HELLO               ((UINT8)0x01U)
 #define CAN_IAP_CMD_START               ((UINT8)0x02U)
@@ -46,4 +47,3 @@ UINT32 CanIap_ReadBe32(const UINT8 *data);
 void CanIap_WriteBe16(UINT8 *data, UINT16 value);
 
 #endif
-

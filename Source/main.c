@@ -1,4 +1,6 @@
 #include "main.h"
+#include "can_iap.h"
+#include "can_iap_protocol.h"
 
 void App_UpgrateFaultMonitor(void);
 void App_FlashUpgrate(void);
@@ -30,7 +32,8 @@ static INT16 fac_ms = 0; // ms
 int main(void)
 {
 	SystemInit();
-	if (FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG) == FLASH_TO_APP_VALUE)
+	if ((FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG) == FLASH_TO_APP_VALUE) &&
+		(CanIap_IsValidAppVector(FLASH_ADDR_APP_START, CAN_IAP_APP_LIMIT_ADDR) != 0U))
 	{
 		IAP_To_APP_Jump(); // 跳回去不能开各种中断或者初始化，也即下面的初始化不能放上来
 	}
@@ -46,10 +49,16 @@ int main(void)
 		// FlashTest();
 		InitUSART1();
 		InitUSART2();
+		CanIap_Init();
 		// InitUSART3();
 		while (1)
 		{
 			App_SysTime();
+			CanIap_Task();
+			if (g_st_SysTimeFlag.bits.b1Sys10msFlag)
+			{
+				CanIap_10msTask();
+			}
 			App_UpgrateFaultMonitor();
 			App_FlashUpgrate();
 			App_UpdateFinishChk(); // 升级结束判断
@@ -62,7 +71,8 @@ int main(void)
 // int main(void)
 // {
 // 	SystemInit();
-// 	// if (FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG) == FLASH_TO_APP_VALUE)
+// 	// if ((FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG) == FLASH_TO_APP_VALUE) &&
+// 	// 	(CanIap_IsValidAppVector(FLASH_ADDR_APP_START, CAN_IAP_APP_LIMIT_ADDR) != 0U))
 // 	// {
 // 	// 	IAP_To_APP_Jump(); // 跳回去不能开各种中断或者初始化，也即下面的初始化不能放上来
 // 	// }
@@ -96,6 +106,7 @@ void jtag_disableAndConfIO(void)
 #if 1
 	/* 禁用 JTAG，PB3、PB4、PA15重定义为普通IO */
 	GPIO_InitTypeDef GPIO_InitStructure;
+	(void)GPIO_InitStructure;
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB, ENABLE); // 使能PA和PB端口时钟
 
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);	 // 配置复用时钟
@@ -260,12 +271,32 @@ void __delay_ms(INT16 ms)
 void IAP_To_APP_Jump(void)
 {
 
-	if (((*(__IO uint32_t *)FLASH_ADDR_APP_START) & 0x2FFE0000) == 0x20000000)
+	if (CanIap_IsValidAppVector(FLASH_ADDR_APP_START, CAN_IAP_APP_LIMIT_ADDR) != 0U)
 	{ // 判断APP区是否有代码
 
 		JumpAddress = *(__IO uint32_t *)(FLASH_ADDR_APP_START + 4); // Jump to user application
 		Jump_To_Application = (pFunction)JumpAddress;
+		__disable_irq();
+		SysTick->CTRL = 0U;
+		TIM_Cmd(TIM3, DISABLE);
+		USART_Cmd(USART1, DISABLE);
+		USART_Cmd(USART2, DISABLE);
+		USART_Cmd(USART3, DISABLE);
+		CAN_DeInit(CAN1);
+		NVIC_DisableIRQ(TIM3_IRQn);
+		NVIC_DisableIRQ(USART1_IRQn);
+		NVIC_DisableIRQ(USART2_IRQn);
+		NVIC_DisableIRQ(USART3_IRQn);
+		NVIC_DisableIRQ(USB_LP_CAN1_RX0_IRQn);
+		NVIC_ClearPendingIRQ(TIM3_IRQn);
+		NVIC_ClearPendingIRQ(USART1_IRQn);
+		NVIC_ClearPendingIRQ(USART2_IRQn);
+		NVIC_ClearPendingIRQ(USART3_IRQn);
+		NVIC_ClearPendingIRQ(USB_LP_CAN1_RX0_IRQn);
+		SCB->VTOR = FLASH_ADDR_APP_START;
+		__set_CONTROL(0U);
 		__set_MSP(*(__IO uint32_t *)FLASH_ADDR_APP_START); // Initialize user application's Stack Pointer
+		__enable_irq();
 		Jump_To_Application();							   // Jump to application
 	}
 }

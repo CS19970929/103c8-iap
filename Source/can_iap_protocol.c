@@ -106,10 +106,9 @@ void CanIap_BuildNack(UINT8 cmd, UINT16 expect_seq, UINT8 code, UINT8 data[8])
 {
 	data[0] = CAN_IAP_CMD_NACK;
 	data[1] = cmd;
-	data[2] = CAN_IAP_ERR_BAD_STATE;
+	data[2] = code;
 	CanIap_WriteBe16(&data[3], expect_seq);
 	data[5] = code;
 	data[6] = 0xFFU;
 	data[7] = 0xFFU;
 }
-
