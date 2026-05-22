@@ -1,6 +1,7 @@
 #include "main.h"
 #include "can_iap.h"
 #include "can_iap_protocol.h"
+#include "iap_upgrade.h"
 
 void App_UpgrateFaultMonitor(void);
 void App_FlashUpgrate(void);
@@ -49,6 +50,7 @@ int main(void)
 		// FlashTest();
 		InitUSART1();
 		InitUSART2();
+		IapUpgrade_Init();
 		CanIap_Init();
 		// InitUSART3();
 		while (1)
@@ -303,28 +305,9 @@ void IAP_To_APP_Jump(void)
 
 void App_UpgrateFaultMonitor(void)
 {
-	static UINT8 s_u8UpgrateFlag = 0;
-	static UINT16 s_u16UpgrateTCnt = 0;
-	if (!u8FlashReceiveCnt || 0 == g_st_SysTimeFlag.bits.b1Sys200msFlag)
+	if (g_st_SysTimeFlag.bits.b1Sys10msFlag)
 	{
-		return;
-	}
-	if (s_u8UpgrateFlag != u8FlashReceiveCnt)
-	{
-		s_u8UpgrateFlag = u8FlashReceiveCnt;
-		s_u16UpgrateTCnt = 0;
-	}
-	else
-	{
-		if (++s_u16UpgrateTCnt > UPGRATER_TIMEOUT)
-		{
-			s_u16UpgrateTCnt = 0;
-			s_u8UpgrateFlag = 0;
-			u8FlashReceiveCnt = 0;
-			Sci_DataInit(&g_stCurrentMsgPtr_SCI1);
-			Sci_DataInit(&g_stCurrentMsgPtr_SCI2);
-			Sci_DataInit(&g_stCurrentMsgPtr_SCI3);
-		}
+		IapUpgrade_10msTask();
 	}
 }
 

@@ -1,4 +1,5 @@
 #include "main.h"
+#include "iap_upgrade.h"
 
 // 长度的问题，怎么解决APP和UPPER长度的问题，还有REG数量的问题
 //  SCI_485 Message Structure
@@ -41,11 +42,18 @@ UINT8 Flash_Faultcnt = 0;
 FLASH_Status FlashWriteOneHalfWord(uint32_t StartAddr, uint16_t Buffer)
 {
 	FLASH_Status result;
+
 	FLASH_Unlock();
 	FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR);
-	while (FLASH_ErasePage(StartAddr) != FLASH_COMPLETE)
-		;
-	result = FLASH_ProgramHalfWord(StartAddr, Buffer);
+	result = FLASH_ErasePage(StartAddr);
+	if (result == FLASH_COMPLETE)
+	{
+		result = FLASH_ProgramHalfWord(StartAddr, Buffer);
+		if ((result == FLASH_COMPLETE) && ((*(vu16 *)StartAddr) != Buffer))
+		{
+			result = FLASH_ERROR_PG;
+		}
+	}
 	FLASH_Lock();
 	return result;
 }
@@ -247,76 +255,42 @@ void Sci_WrRegsDecode(struct RS485MSG *s)
 {
 	uint16_t u16WrRegNum;
 	uint16_t u16SciRegStartAddr;
+	UINT8 ok;
 
 	u16SciRegStartAddr = s->u16Buffer[3] + (s->u16Buffer[2] << 8);
 	u16WrRegNum = s->u16Buffer[5] + (s->u16Buffer[4] << 8);
+	ok = 0U;
+
 	switch (u16SciRegStartAddr)
 	{
 	case RS485_CMD_ADDR_FLASH_CONNECT:
-		if (u16WrRegNum == 1)
-		{
-		}
-		else
-		{
-			s->AckType = RS485_ACK_NEG;
-			s->ErrorType = RS485_ERROR_CMD_INVALID;
-		}
+		ok = IapUpgrade_SerialConnect(u16WrRegNum, &s->u16Buffer[7]);
 		break;
 
 	case RS485_CMD_ADDR_FLASH_UPGRATE:
-		if (u16WrRegNum <= 1033)
-		{
-			APPFlashErase(u8FlashReceiveCnt);
-
-			// 下面这个传值会不会出问题
-			if (FlashWrite(FLASH_ADDR_APP_START + 1024 * u8FlashReceiveCnt, &s->u16Buffer[7], 1024))
-			{
-				++Flash_Faultcnt;
-				s->AckType = RS485_ACK_NEG;
-				s->ErrorType = RS485_ERROR_CMD_INVALID;
-			}
-			else
-			{
-				++u8FlashReceiveCnt;
-			}
-		}
-		else
-		{
-			s->AckType = RS485_ACK_NEG;
-			s->ErrorType = RS485_ERROR_CMD_INVALID;
-		}
+		ok = IapUpgrade_SerialWriteBlock(u16WrRegNum, s->u16Buffer[6], &s->u16Buffer[7]);
 		break;
 
 	case RS485_CMD_ADDR_FLASH_COMPLETE:
-		if (u16WrRegNum == 1)
+		ok = IapUpgrade_SerialComplete(u16WrRegNum, &s->u16Buffer[7]);
+		if (ok != 0U)
 		{
-			// FlashWriteOneHalfWord(FLASH_ADDR_UPDATE_FLAG, FLASH_TO_APP_VALUE);
-			// u8FlagUdFinishE2PROM = 1;
-			if (FLASH_COMPLETE != FlashWriteOneHalfWord(FLASH_ADDR_UPDATE_FLAG, FLASH_TO_APP_VALUE))
-			{
-				Flash_Faultcnt++;
-				s->AckType = RS485_ACK_NEG;
-				s->ErrorType = RS485_ERROR_CMD_INVALID;
-			}
-			else
-			{
-				u8FlagUdFinishE2PROM = 1;
-			}
-		}
-		else
-		{
-			s->AckType = RS485_ACK_NEG;
-			s->ErrorType = RS485_ERROR_CMD_INVALID;
+			u8FlagUdFinishE2PROM = 1U;
 		}
 		break;
 
 	default:
 		s->AckType = RS485_ACK_NEG;
 		s->ErrorType = RS485_ERROR_CMD_INVALID;
-		break;
+		return;
+	}
+
+	if (ok == 0U)
+	{
+		s->AckType = RS485_ACK_NEG;
+		s->ErrorType = RS485_ERROR_CMD_INVALID;
 	}
 }
-
 void Sci_WrReg_s_Decode_ACK(struct RS485MSG *s)
 {
 	uint8_t i;
