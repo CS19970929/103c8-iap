@@ -398,6 +398,11 @@
               <FileType>5</FileType>
               <FilePath>..\Include\Sci.h</FilePath>
             </File>
+            <File>
+              <FileName>can_iap_protocol.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Include\can_iap_protocol.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -417,6 +422,11 @@
               <FileName>Sci.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Source\Sci.c</FilePath>
+            </File>
+            <File>
+              <FileName>can_iap_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Source\can_iap_protocol.c</FilePath>
             </File>
           </Files>
         </Group>
