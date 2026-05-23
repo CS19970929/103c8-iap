@@ -2,6 +2,7 @@
 #include "can_iap.h"
 #include "can_iap_protocol.h"
 #include "iap_upgrade.h"
+#include "boot_control.h"
 
 void App_UpgrateFaultMonitor(void);
 void App_FlashUpgrate(void);
@@ -33,8 +34,7 @@ static INT16 fac_ms = 0; // ms
 int main(void)
 {
 	SystemInit();
-	if ((FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG) == FLASH_TO_APP_VALUE) &&
-		(CanIap_IsValidAppVector(FLASH_ADDR_APP_START, CAN_IAP_APP_LIMIT_ADDR) != 0U))
+	if (BootCtrl_ShouldJumpToApp() != 0U)
 	{
 		IAP_To_APP_Jump(); // 跳回去不能开各种中断或者初始化，也即下面的初始化不能放上来
 	}
@@ -69,39 +69,6 @@ int main(void)
 
 	return 0;
 }
-
-// int main(void)
-// {
-// 	SystemInit();
-// 	// if ((FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG) == FLASH_TO_APP_VALUE) &&
-// 	// 	(CanIap_IsValidAppVector(FLASH_ADDR_APP_START, CAN_IAP_APP_LIMIT_ADDR) != 0U))
-// 	// {
-// 	// 	IAP_To_APP_Jump(); // 跳回去不能开各种中断或者初始化，也即下面的初始化不能放上来
-// 	// }
-// 	// else
-// 	// {
-// 		InitDelay();
-// 		InitNVIC();
-// 		InitIO();
-// 		InitTimer();
-// 		InitSystemWakeUp(); // 少了这个初始化函数导致写出错，miss，让硬件整体正常工作
-// 							// 这个到底放哪里，是取决于硬件是否需要执行一些操作菜正常工作？
-// 							// 不过既然能执行这个函数，说明单片机已经正常工作
-// 		// FlashTest();
-// 		InitUSART1();
-// 		InitUSART2();
-// 		// InitUSART3();
-// 		while (1)
-// 		{
-// 			App_SysTime();
-// 			// App_UpgrateFaultMonitor();
-// 			// App_FlashUpgrate();
-// 			// App_UpdateFinishChk(); // 升级结束判断
-// 		}
-// 	// }
-
-// 	return 0;
-// }
 
 void jtag_disableAndConfIO(void)
 {
@@ -219,12 +186,7 @@ void InitIO(void)
 }
 void FlashTest(void)
 {
-	/*
-	if(FLASH_COMPLETE != FlashWriteOneHalfWord(FLASH_ADDR_UPDATE_FLAG, FLASH_TO_APP_VALUE)) {
-		Flash_Faultcnt++;
-	}
-	*/
-	falshcnt = FlashReadOneHalfWord(FLASH_ADDR_UPDATE_FLAG);
+	falshcnt = BootCtrl_IsIapRequestPending();
 }
 
 void InitSystemWakeUp(void)

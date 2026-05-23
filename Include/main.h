@@ -52,6 +52,7 @@
 #define FLASH_ADDR_UPDATE_FLAG 			0x0801F800			//IAP=18K
 #define FLASH_ADDR_SLEEP_FLAG           0x0801FC00			//���߹ؼ�ָ�2K
 
+/* legacy values; not used as boot gates */
 #define FLASH_TO_IAP_VALUE				((UINT16)0x00AB)
 #define FLASH_TO_APP_VALUE				((UINT16)0xFFFF)
 

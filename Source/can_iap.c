@@ -1,10 +1,11 @@
 #include "main.h"
 #include "can_iap.h"
 #include "can_iap_protocol.h"
+#include "boot_control.h"
+#include "iap_flash.h"
 #include <string.h>
 
 #define CAN_IAP_BLOCK_BYTES             ((UINT16)256U)
-#define CAN_IAP_FLASH_PAGE_SIZE         ((UINT32)1024U)
 #define CAN_IAP_RX_TIMEOUT_10MS         ((UINT16)500U)
 #define CAN_IAP_TX_WAIT_LOOP            ((UINT32)60000U)
 #define CAN_IAP_CAN_PRESCALER_250K      ((UINT16)4U)
@@ -92,80 +93,6 @@ static UINT8 can_iap_send_nack(UINT8 cmd, UINT8 code)
 	return (CAN_TransmitStatus(CAN1, mailbox) == CAN_TxStatus_Ok) ? 1U : 0U;
 }
 
-static UINT8 can_iap_is_range_valid(UINT32 offset, UINT16 length)
-{
-	UINT32 start = CAN_IAP_APP_BASE_ADDR + offset;
-	UINT32 end = start + (UINT32)length;
-
-	if ((length == 0U) || (start < CAN_IAP_APP_BASE_ADDR) || (end > CAN_IAP_APP_LIMIT_ADDR) || (end < start))
-	{
-		return 0U;
-	}
-	return 1U;
-}
-
-static UINT8 can_iap_erase_page(UINT32 addr)
-{
-	FLASH_Status status;
-
-	FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR);
-	status = FLASH_ErasePage(addr);
-	return (status == FLASH_COMPLETE) ? 1U : 0U;
-}
-
-static UINT8 can_iap_program_block(UINT32 offset, const UINT8 *data, UINT16 length)
-{
-	UINT32 addr;
-	UINT16 i;
-	UINT16 halfword;
-
-	if (can_iap_is_range_valid(offset, length) == 0U)
-	{
-		return 0U;
-	}
-
-	addr = CAN_IAP_APP_BASE_ADDR + offset;
-	FLASH_Unlock();
-
-	if ((addr & (CAN_IAP_FLASH_PAGE_SIZE - 1U)) == 0U)
-	{
-		if (can_iap_erase_page(addr) == 0U)
-		{
-			FLASH_Lock();
-			return 0U;
-		}
-	}
-
-	for (i = 0U; i < length; i = (UINT16)(i + 2U))
-	{
-		halfword = data[i] | 0xFF00U;
-		if ((UINT16)(i + 1U) < length)
-		{
-			halfword = (UINT16)(data[i] | ((UINT16)data[i + 1U] << 8));
-		}
-
-		FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR);
-		if (FLASH_ProgramHalfWord(addr + i, halfword) != FLASH_COMPLETE)
-		{
-			FLASH_Lock();
-			return 0U;
-		}
-		if (*(__IO UINT16 *)(addr + i) != halfword)
-		{
-			FLASH_Lock();
-			return 0U;
-		}
-	}
-
-	FLASH_Lock();
-	return 1U;
-}
-
-static UINT8 can_iap_write_flag(UINT16 value)
-{
-	return (FlashWriteOneHalfWord(FLASH_ADDR_UPDATE_FLAG, value) == FLASH_COMPLETE) ? 1U : 0U;
-}
-
 static void can_iap_handle_hello(const CanRxMsg *rx)
 {
 	if ((rx->DLC != 8U) || (rx->Data[1] != CAN_IAP_PROTOCOL_VERSION))
@@ -201,7 +128,8 @@ static void can_iap_handle_start(const CanRxMsg *rx)
 		return;
 	}
 
-	if (can_iap_write_flag(FLASH_TO_IAP_VALUE) == 0U)
+	BootCtrl_ClearRequest();
+	if (IapFlash_Begin(IAP_FLASH_OWNER_CAN) == 0U)
 	{
 		(void)can_iap_send_nack(CAN_IAP_CMD_START, CAN_IAP_ERR_FLASH);
 		return;
@@ -273,7 +201,7 @@ static void can_iap_handle_commit(const CanRxMsg *rx)
 		return;
 	}
 
-	if (can_iap_program_block(s_can_iap.written, s_can_iap.block, block_len) == 0U)
+	if (IapFlash_Write(IAP_FLASH_OWNER_CAN, s_can_iap.written, s_can_iap.block, block_len) == 0U)
 	{
 		s_can_iap.state = CAN_IAP_STATE_ERROR;
 		s_can_iap.last_error = CAN_IAP_ERR_FLASH;
@@ -309,15 +237,9 @@ static void can_iap_handle_end(const CanRxMsg *rx)
 		return;
 	}
 
-	if (CanIap_IsValidAppVector(CAN_IAP_APP_BASE_ADDR, CAN_IAP_APP_BASE_ADDR + s_can_iap.fw_size) == 0U)
+	if (IapFlash_Finish(IAP_FLASH_OWNER_CAN, s_can_iap.fw_size) == 0U)
 	{
 		(void)can_iap_send_nack(CAN_IAP_CMD_END, CAN_IAP_ERR_APP_INVALID);
-		return;
-	}
-
-	if (can_iap_write_flag(FLASH_TO_APP_VALUE) == 0U)
-	{
-		(void)can_iap_send_nack(CAN_IAP_CMD_END, CAN_IAP_ERR_FLASH);
 		return;
 	}
 
@@ -329,6 +251,7 @@ static void can_iap_handle_end(const CanRxMsg *rx)
 
 static void can_iap_handle_abort(void)
 {
+	IapFlash_Abort(IAP_FLASH_OWNER_CAN);
 	can_iap_reset_runtime(CAN_IAP_STATE_IDLE);
 	(void)can_iap_send_ack(CAN_IAP_CMD_ABORT, s_can_iap.state, CAN_IAP_ERR_OK);
 }
@@ -485,6 +408,7 @@ void CanIap_10msTask(void)
 	s_can_iap.state = CAN_IAP_STATE_ERROR;
 	s_can_iap.last_error = CAN_IAP_ERR_BAD_STATE;
 	s_can_iap.block_bytes = 0U;
+	IapFlash_Abort(IAP_FLASH_OWNER_CAN);
 }
 
 UINT8 CanIap_GetState(void)
