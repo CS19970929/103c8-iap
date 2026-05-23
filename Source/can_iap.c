@@ -8,7 +8,8 @@
 #define CAN_IAP_BLOCK_BYTES             ((UINT16)256U)
 #define CAN_IAP_RX_TIMEOUT_10MS         ((UINT16)500U)
 #define CAN_IAP_TX_WAIT_LOOP            ((UINT32)60000U)
-#define CAN_IAP_CAN_PRESCALER_250K      ((UINT16)4U)
+#define CAN_IAP_HEARTBEAT_TX_WAIT_LOOP  ((UINT32)3000U)
+#define CAN_IAP_CAN_PRESCALER_250K      ((UINT16)18U) /* PCLK1 36MHz / 8tq / 18 = 250k */
 
 typedef struct
 {
@@ -28,6 +29,8 @@ typedef struct
 } CAN_IAP_RUNTIME;
 
 static CAN_IAP_RUNTIME s_can_iap;
+static UINT8 s_can_iap_heartbeat_seq;
+static UINT16 s_can_iap_heartbeat_10ms;
 
 static void can_iap_reset_runtime(UINT8 state)
 {
@@ -37,12 +40,39 @@ static void can_iap_reset_runtime(UINT8 state)
 	s_can_iap.running_crc = 0xFFFFU;
 }
 
+static UINT8 can_iap_transmit(CanTxMsg *tx, UINT32 wait_loop)
+{
+	UINT32 wait;
+	UINT8 status;
+	UINT8 mailbox;
+
+	mailbox = CAN_Transmit(CAN1, tx);
+	if (mailbox >= 3U)
+	{
+		return 0U;
+	}
+
+	wait = wait_loop;
+	while ((wait > 0U) && (CAN_TransmitStatus(CAN1, mailbox) == CAN_TxStatus_Pending))
+	{
+		--wait;
+	}
+
+	status = CAN_TransmitStatus(CAN1, mailbox);
+	if (status == CAN_TxStatus_Ok)
+	{
+		return 1U;
+	}
+
+	CAN_CancelTransmit(CAN1, mailbox);
+	return 0U;
+}
+
 static UINT8 can_iap_send_ack(UINT8 cmd, UINT8 status, UINT8 code)
 {
 	CanTxMsg tx;
-	UINT32 wait;
-	UINT8 mailbox;
 
+	s_can_iap.last_error = code;
 	memset(&tx, 0, sizeof(tx));
 	tx.ExtId = CanIap_AckId(s_can_iap.node);
 	tx.IDE = CAN_ID_EXT;
@@ -50,27 +80,14 @@ static UINT8 can_iap_send_ack(UINT8 cmd, UINT8 status, UINT8 code)
 	tx.DLC = 8U;
 	CanIap_BuildAck(cmd, status, s_can_iap.expect_seq, code, tx.Data);
 
-	mailbox = CAN_Transmit(CAN1, &tx);
-	if (mailbox >= 3U)
-	{
-		return 0U;
-	}
-
-	wait = CAN_IAP_TX_WAIT_LOOP;
-	while ((wait > 0U) && (CAN_TransmitStatus(CAN1, mailbox) == CAN_TxStatus_Pending))
-	{
-		--wait;
-	}
-
-	return (CAN_TransmitStatus(CAN1, mailbox) == CAN_TxStatus_Ok) ? 1U : 0U;
+	return can_iap_transmit(&tx, CAN_IAP_TX_WAIT_LOOP);
 }
 
 static UINT8 can_iap_send_nack(UINT8 cmd, UINT8 code)
 {
 	CanTxMsg tx;
-	UINT32 wait;
-	UINT8 mailbox;
 
+	s_can_iap.last_error = code;
 	memset(&tx, 0, sizeof(tx));
 	tx.ExtId = CanIap_AckId(s_can_iap.node);
 	tx.IDE = CAN_ID_EXT;
@@ -78,19 +95,28 @@ static UINT8 can_iap_send_nack(UINT8 cmd, UINT8 code)
 	tx.DLC = 8U;
 	CanIap_BuildNack(cmd, s_can_iap.expect_seq, code, tx.Data);
 
-	mailbox = CAN_Transmit(CAN1, &tx);
-	if (mailbox >= 3U)
-	{
-		return 0U;
-	}
+	return can_iap_transmit(&tx, CAN_IAP_TX_WAIT_LOOP);
+}
 
-	wait = CAN_IAP_TX_WAIT_LOOP;
-	while ((wait > 0U) && (CAN_TransmitStatus(CAN1, mailbox) == CAN_TxStatus_Pending))
-	{
-		--wait;
-	}
+static void can_iap_send_heartbeat(void)
+{
+	CanTxMsg tx;
 
-	return (CAN_TransmitStatus(CAN1, mailbox) == CAN_TxStatus_Ok) ? 1U : 0U;
+	memset(&tx, 0, sizeof(tx));
+	tx.StdId = CAN_IAP_HEARTBEAT_STD_ID;
+	tx.IDE = CAN_ID_STD;
+	tx.RTR = CAN_RTR_DATA;
+	tx.DLC = 8U;
+	tx.Data[0] = 0x49U; /* 'I' */
+	tx.Data[1] = 0x41U; /* 'A' */
+	tx.Data[2] = CAN_IAP_PROTOCOL_VERSION;
+	tx.Data[3] = s_can_iap.node;
+	tx.Data[4] = s_can_iap.state;
+	tx.Data[5] = s_can_iap.last_cmd;
+	tx.Data[6] = s_can_iap.last_error;
+	tx.Data[7] = s_can_iap_heartbeat_seq++;
+
+	(void)can_iap_transmit(&tx, CAN_IAP_HEARTBEAT_TX_WAIT_LOOP);
 }
 
 static void can_iap_handle_hello(const CanRxMsg *rx)
@@ -394,6 +420,12 @@ void CanIap_Task(void)
 
 void CanIap_10msTask(void)
 {
+	if (++s_can_iap_heartbeat_10ms >= CAN_IAP_HEARTBEAT_PERIOD_10MS)
+	{
+		s_can_iap_heartbeat_10ms = 0U;
+		can_iap_send_heartbeat();
+	}
+
 	if (s_can_iap.state != CAN_IAP_STATE_RECEIVING)
 	{
 		return;

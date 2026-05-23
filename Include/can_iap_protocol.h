@@ -16,6 +16,8 @@
 #define CAN_IAP_ACK_BASE_ID             ((UINT32)0x14F8F100U)
 #define CAN_IAP_DATA_BASE_ID            ((UINT32)0x14000000U)
 #define CAN_IAP_DATA_ID_MASK            ((UINT32)0x1F000000U)
+#define CAN_IAP_HEARTBEAT_STD_ID        ((UINT16)0x05FU)
+#define CAN_IAP_HEARTBEAT_PERIOD_10MS   ((UINT16)100U)
 
 #define CAN_IAP_CMD_HELLO               ((UINT8)0x01U)
 #define CAN_IAP_CMD_START               ((UINT8)0x02U)
