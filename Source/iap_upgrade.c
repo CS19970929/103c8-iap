@@ -22,6 +22,7 @@ static IAP_UPGRADE_RUNTIME s_iap_upgrade;
 
 static void iap_upgrade_set_error(UINT8 error)
 {
+	IapFlash_Abort(IAP_FLASH_OWNER_SERIAL);
 	s_iap_upgrade.state = IAP_UPGRADE_STATE_ERROR;
 	s_iap_upgrade.last_error = error;
 	if (Flash_Faultcnt < (UINT8)0xFFU)
@@ -74,6 +75,7 @@ UINT8 IapUpgrade_SerialConnect(UINT16 value_count, const UINT8 *payload)
 		return 0U;
 	}
 
+	IapFlash_Abort(IAP_FLASH_OWNER_SERIAL);
 	iap_upgrade_reset(IAP_UPGRADE_STATE_READY);
 	BootCtrl_ClearRequest();
 	if (IapFlash_Begin(IAP_FLASH_OWNER_SERIAL) == 0U)
@@ -141,7 +143,8 @@ UINT8 IapUpgrade_SerialComplete(UINT16 value_count, const UINT8 *payload)
 		iap_upgrade_set_error(IAP_UPGRADE_ERR_BAD_PARAM);
 		return 0U;
 	}
-	if (s_iap_upgrade.block_count == 0U)
+	if ((s_iap_upgrade.state != IAP_UPGRADE_STATE_RECEIVING) || (s_iap_upgrade.block_count == 0U) ||
+		(s_iap_upgrade.written_bytes < 8U))
 	{
 		iap_upgrade_set_error(IAP_UPGRADE_ERR_BAD_STATE);
 		return 0U;
@@ -171,7 +174,6 @@ void IapUpgrade_10msTask(void)
 		return;
 	}
 
-	IapFlash_Abort(IAP_FLASH_OWNER_SERIAL);
 	iap_upgrade_set_error(IAP_UPGRADE_ERR_TIMEOUT);
 	u8FlashReceiveCnt = 0U;
 }
