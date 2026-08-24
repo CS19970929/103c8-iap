@@ -13,7 +13,6 @@ typedef struct
 	UINT8 pending_valid;
 	UINT8 pending_byte;
 	UINT16 first_page_len;
-	UINT32 next_offset;
 	UINT32 pending_offset;
 	UINT8 erased_map[IAP_FLASH_ERASE_MAP_BYTES];
 	UINT8 first_page[IAP_FLASH_PAGE_SIZE];
@@ -184,6 +183,31 @@ static UINT8 iap_flash_program_even_range(UINT32 offset, const UINT8 *data, UINT
 	return 1U;
 }
 
+static UINT8 iap_flash_flush_pending(void)
+{
+	UINT16 halfword;
+
+	if (s_iap_flash.pending_valid == 0U)
+	{
+		return 1U;
+	}
+	if (iap_flash_ensure_page_erased(s_iap_flash.pending_offset) == 0U)
+	{
+		return 0U;
+	}
+
+	halfword = (UINT16)s_iap_flash.pending_byte | 0xFF00U;
+	FLASH_Unlock();
+	if (iap_flash_program_halfword(CAN_IAP_APP_BASE_ADDR + s_iap_flash.pending_offset, halfword) == 0U)
+	{
+		FLASH_Lock();
+		return 0U;
+	}
+	FLASH_Lock();
+	s_iap_flash.pending_valid = 0U;
+	return 1U;
+}
+
 static UINT8 iap_flash_program_stream(UINT32 offset, const UINT8 *data, UINT16 length)
 {
 	UINT16 even_len;
@@ -196,25 +220,31 @@ static UINT8 iap_flash_program_stream(UINT32 offset, const UINT8 *data, UINT16 l
 
 	if (s_iap_flash.pending_valid != 0U)
 	{
-		if ((offset != (s_iap_flash.pending_offset + 1U)) ||
-			(iap_flash_ensure_page_erased(s_iap_flash.pending_offset) == 0U))
+		if (offset == (s_iap_flash.pending_offset + 1U))
 		{
-			return 0U;
-		}
+			if (iap_flash_ensure_page_erased(s_iap_flash.pending_offset) == 0U)
+			{
+				return 0U;
+			}
 
-		halfword = (UINT16)s_iap_flash.pending_byte | ((UINT16)data[0] << 8);
-		FLASH_Unlock();
-		if (iap_flash_program_halfword(CAN_IAP_APP_BASE_ADDR + s_iap_flash.pending_offset, halfword) == 0U)
-		{
+			halfword = (UINT16)s_iap_flash.pending_byte | ((UINT16)data[0] << 8);
+			FLASH_Unlock();
+			if (iap_flash_program_halfword(CAN_IAP_APP_BASE_ADDR + s_iap_flash.pending_offset, halfword) == 0U)
+			{
+				FLASH_Lock();
+				return 0U;
+			}
 			FLASH_Lock();
+
+			s_iap_flash.pending_valid = 0U;
+			offset++;
+			data++;
+			length--;
+		}
+		else if (iap_flash_flush_pending() == 0U)
+		{
 			return 0U;
 		}
-		FLASH_Lock();
-
-		s_iap_flash.pending_valid = 0U;
-		offset++;
-		data++;
-		length--;
 	}
 
 	if (length == 0U)
@@ -245,31 +275,6 @@ static UINT8 iap_flash_program_stream(UINT32 offset, const UINT8 *data, UINT16 l
 		s_iap_flash.pending_offset = offset;
 	}
 
-	return 1U;
-}
-
-static UINT8 iap_flash_flush_pending(void)
-{
-	UINT16 halfword;
-
-	if (s_iap_flash.pending_valid == 0U)
-	{
-		return 1U;
-	}
-	if (iap_flash_ensure_page_erased(s_iap_flash.pending_offset) == 0U)
-	{
-		return 0U;
-	}
-
-	halfword = (UINT16)s_iap_flash.pending_byte | 0xFF00U;
-	FLASH_Unlock();
-	if (iap_flash_program_halfword(CAN_IAP_APP_BASE_ADDR + s_iap_flash.pending_offset, halfword) == 0U)
-	{
-		FLASH_Lock();
-		return 0U;
-	}
-	FLASH_Lock();
-	s_iap_flash.pending_valid = 0U;
 	return 1U;
 }
 
@@ -380,8 +385,7 @@ UINT8 IapFlash_Write(UINT8 owner, UINT32 offset, const UINT8 *data, UINT16 lengt
 	const UINT8 *write_data;
 	UINT16 write_length;
 
-	if ((s_iap_flash.owner != owner) || (data == 0) ||
-		(offset != s_iap_flash.next_offset) || (iap_flash_range_valid(offset, length) == 0U))
+	if ((s_iap_flash.owner != owner) || (data == 0) || (iap_flash_range_valid(offset, length) == 0U))
 	{
 		return 0U;
 	}
@@ -414,14 +418,12 @@ UINT8 IapFlash_Write(UINT8 owner, UINT32 offset, const UINT8 *data, UINT16 lengt
 		return 0U;
 	}
 
-	s_iap_flash.next_offset = offset + (UINT32)length;
 	return 1U;
 }
 
 UINT8 IapFlash_Finish(UINT8 owner, UINT32 image_size)
 {
-	if ((s_iap_flash.owner != owner) || (image_size != s_iap_flash.next_offset) ||
-		(image_size == 0U) || (image_size > IAP_FLASH_APP_BYTES))
+	if ((s_iap_flash.owner != owner) || (image_size == 0U) || (image_size > IAP_FLASH_APP_BYTES))
 	{
 		return 0U;
 	}
