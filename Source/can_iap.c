@@ -17,12 +17,16 @@ typedef struct
 	UINT8 node;
 	UINT8 last_cmd;
 	UINT8 last_error;
+	UINT8 last_commit_valid;
 	UINT16 expect_seq;
 	UINT16 block_seq;
 	UINT16 block_bytes;
 	UINT16 fw_crc;
 	UINT16 running_crc;
 	UINT16 idle_10ms;
+	UINT16 last_commit_seq;
+	UINT16 last_commit_len;
+	UINT16 last_commit_crc;
 	UINT32 fw_size;
 	UINT32 written;
 	UINT8 block[CAN_IAP_BLOCK_BYTES];
@@ -38,6 +42,14 @@ static void can_iap_reset_runtime(UINT8 state)
 	s_can_iap.state = state;
 	s_can_iap.node = CAN_IAP_NODE_DEFAULT;
 	s_can_iap.running_crc = 0xFFFFU;
+}
+
+static void can_iap_enter_error(UINT8 error)
+{
+	IapFlash_Abort(IAP_FLASH_OWNER_CAN);
+	s_can_iap.state = CAN_IAP_STATE_ERROR;
+	s_can_iap.last_error = error;
+	s_can_iap.block_bytes = 0U;
 }
 
 static UINT8 can_iap_transmit(CanTxMsg *tx, UINT32 wait_loop)
@@ -196,6 +208,18 @@ static void can_iap_handle_data(const CanRxMsg *rx)
 	s_can_iap.idle_10ms = 0U;
 }
 
+static UINT8 can_iap_is_duplicate_commit(UINT16 block_seq, UINT16 block_len, UINT16 block_crc)
+{
+	if ((s_can_iap.last_commit_valid != 0U) && (s_can_iap.block_bytes == 0U) &&
+		(block_seq == s_can_iap.last_commit_seq) &&
+		(block_len == s_can_iap.last_commit_len) &&
+		(block_crc == s_can_iap.last_commit_crc))
+	{
+		return 1U;
+	}
+	return 0U;
+}
+
 static void can_iap_handle_commit(const CanRxMsg *rx)
 {
 	UINT16 block_seq;
@@ -212,10 +236,26 @@ static void can_iap_handle_commit(const CanRxMsg *rx)
 	block_seq = CanIap_ReadBe16(&rx->Data[1]);
 	block_len = CanIap_ReadBe16(&rx->Data[3]);
 	block_crc = CanIap_ReadBe16(&rx->Data[5]);
-	next_written = s_can_iap.written + (UINT32)block_len;
 
+	if (can_iap_is_duplicate_commit(block_seq, block_len, block_crc) != 0U)
+	{
+		s_can_iap.idle_10ms = 0U;
+		(void)can_iap_send_ack(CAN_IAP_CMD_COMMIT, s_can_iap.state, CAN_IAP_ERR_OK);
+		return;
+	}
+
+	next_written = s_can_iap.written + (UINT32)block_len;
 	if ((block_seq != s_can_iap.block_seq) || (block_len == 0U) ||
 		(block_len > s_can_iap.block_bytes) || (next_written > s_can_iap.fw_size))
+	{
+		(void)can_iap_send_nack(CAN_IAP_CMD_COMMIT, CAN_IAP_ERR_BAD_PARAM);
+		return;
+	}
+
+	/* Non-final blocks must commit all received bytes. The final block may carry
+	 * up to seven CAN padding bytes because DATA frames are always 8 bytes. */
+	if (((next_written < s_can_iap.fw_size) && (block_len != s_can_iap.block_bytes)) ||
+		((next_written == s_can_iap.fw_size) && ((UINT16)(s_can_iap.block_bytes - block_len) > 7U)))
 	{
 		(void)can_iap_send_nack(CAN_IAP_CMD_COMMIT, CAN_IAP_ERR_BAD_PARAM);
 		return;
@@ -229,14 +269,17 @@ static void can_iap_handle_commit(const CanRxMsg *rx)
 
 	if (IapFlash_Write(IAP_FLASH_OWNER_CAN, s_can_iap.written, s_can_iap.block, block_len) == 0U)
 	{
-		s_can_iap.state = CAN_IAP_STATE_ERROR;
-		s_can_iap.last_error = CAN_IAP_ERR_FLASH;
+		can_iap_enter_error(CAN_IAP_ERR_FLASH);
 		(void)can_iap_send_nack(CAN_IAP_CMD_COMMIT, CAN_IAP_ERR_FLASH);
 		return;
 	}
 
 	s_can_iap.running_crc = CanIap_Crc16Update(s_can_iap.running_crc, s_can_iap.block, block_len);
 	s_can_iap.written = next_written;
+	s_can_iap.last_commit_valid = 1U;
+	s_can_iap.last_commit_seq = block_seq;
+	s_can_iap.last_commit_len = block_len;
+	s_can_iap.last_commit_crc = block_crc;
 	s_can_iap.block_seq++;
 	s_can_iap.block_bytes = 0U;
 	s_can_iap.idle_10ms = 0U;
@@ -265,6 +308,7 @@ static void can_iap_handle_end(const CanRxMsg *rx)
 
 	if (IapFlash_Finish(IAP_FLASH_OWNER_CAN, s_can_iap.fw_size) == 0U)
 	{
+		can_iap_enter_error(CAN_IAP_ERR_APP_INVALID);
 		(void)can_iap_send_nack(CAN_IAP_CMD_END, CAN_IAP_ERR_APP_INVALID);
 		return;
 	}
@@ -388,6 +432,8 @@ static void can_iap_can_init(void)
 	can.CAN_Prescaler = CAN_IAP_CAN_PRESCALER_250K;
 	(void)CAN_Init(CAN1, &can);
 
+	/* Keep the existing accept-all filter so deployed tools and node-selection
+	 * behavior stay byte-for-byte compatible. Filtering is performed in software. */
 	filter.CAN_FilterNumber = 0U;
 	filter.CAN_FilterMode = CAN_FilterMode_IdMask;
 	filter.CAN_FilterScale = CAN_FilterScale_32bit;
@@ -437,10 +483,7 @@ void CanIap_10msTask(void)
 		return;
 	}
 
-	s_can_iap.state = CAN_IAP_STATE_ERROR;
-	s_can_iap.last_error = CAN_IAP_ERR_BAD_STATE;
-	s_can_iap.block_bytes = 0U;
-	IapFlash_Abort(IAP_FLASH_OWNER_CAN);
+	can_iap_enter_error(CAN_IAP_ERR_BAD_STATE);
 }
 
 UINT8 CanIap_GetState(void)
